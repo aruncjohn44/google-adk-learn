@@ -1,0 +1,5 @@
+# .dockerignore
+pgdata
+*.log
+*.tmp
+.env
