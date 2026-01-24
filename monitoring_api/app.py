@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, render_template, request, jsonify
 
 from . import sales_analysis_tools
 
@@ -9,6 +9,33 @@ ADK_BASE_URL = os.getenv("ADK_API_BASE_URL", "http://localhost:8000")
 
 # MUST match the ADK agent folder name
 ADK_APP_NAME = "monitoring_agent"
+
+def normalize_adk_response(adk_events: list):
+    answer = None
+    sql = None
+    rows = None
+
+    for event in adk_events:
+        parts = event.get("content", {}).get("parts", [])
+
+        for part in parts:
+            # Final text answer
+            if "text" in part:
+                answer = part["text"]
+
+            # Tool response (SQL execution)
+            if "functionResponse" in part:
+                fr = part["functionResponse"]["response"]
+                if fr.get("status") == "success":
+                    rows = fr.get("data")
+                    sql = fr.get("sql")
+
+    return {
+        "answer": answer,
+        "data": rows,
+        "sql": sql,
+    }
+
 
 
 def create_app() -> Flask:
@@ -106,24 +133,50 @@ def create_app() -> Flask:
             resp.raise_for_status()
             events = resp.json()
 
-            # 3️⃣ Extract final model response (last model message)
-            final_answer = None
-            for event in reversed(events):
-                content = event.get("content", {})
-                if content.get("role") == "model":
-                    parts = content.get("parts", [])
-                    if parts and "text" in parts[0]:
-                        final_answer = parts[0]["text"]
-                        break
+            normalized = normalize_adk_response(events)
 
             return jsonify({
                 "query": user_query,
-                "answer": final_answer,
-                "events": events,  # keep for debugging / observability
+                **normalized
             })
 
         except requests.RequestException as e:
             return jsonify({"error": str(e)}), 500
+        
+    @app.get("/chat")
+    def chat_page():
+        # Renders the chat UI
+        return render_template("chat.html")
+
+    @app.post("/ask")
+    def ask_agent():
+        payload = request.get_json() or {}
+        query = payload.get("query", "").strip()
+
+        if not query:
+            return jsonify({"error": "Empty query"}), 400
+
+        adk_payload = {
+            "appName": ADK_APP_NAME,
+            "userId": "web_user",
+            "sessionId": "web_session",
+            "newMessage": {
+                "role": "user",
+                "parts": [{"text": query}]
+            }
+        }
+
+        resp = requests.post(
+            f"{ADK_BASE_URL}/run",
+            json=adk_payload,
+            timeout=60
+        )
+
+        events = resp.json()
+
+        normalized = normalize_adk_response(events)
+
+        return jsonify(normalized)
 
     return app
 
