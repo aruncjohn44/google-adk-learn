@@ -20,6 +20,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  monitoring_agent:
+    build:
+      context: .
+      dockerfile: monitoring_agent/Dockerfile
+    container_name: monitoring_agent_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 volumes:
   postgres_data:
-
