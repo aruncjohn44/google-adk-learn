@@ -21,21 +21,27 @@ services:
       timeout: 5s
       retries: 5
 
-  monitoring_agent:
+  adk-agent:
     build:
       context: .
-      dockerfile: monitoring_agent/Dockerfile
-    container_name: monitoring_agent_api
-    restart: unless-stopped
-    env_file:
-      - .env
+      dockerfile: monitoring_agent/Dockerfile.adk
+    container_name: adk-agent
+    ports:
+      - "8000:8000"
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
+      - PYTHONUNBUFFERED=1
+      - DB_HOST=postgres
+
+  monitoring-api:
+    build:
+      context: .
+      dockerfile: monitoring_api/Dockerfile.api
+    container_name: monitoring-api
     ports:
       - "8080:8080"
+    environment:
+      - ADK_API_BASE_URL=http://adk-agent:8000
     depends_on:
-      postgres:
-        condition: service_healthy
+      - adk-agent
 volumes:
   postgres_data:

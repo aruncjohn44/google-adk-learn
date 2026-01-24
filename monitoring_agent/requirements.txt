@@ -1,4 +1,8 @@
 psycopg2-binary
 dotenv
 python-dotenv
-flask
+google-adk
+google-cloud-aiplatform
+pandas
+numpy
+requests

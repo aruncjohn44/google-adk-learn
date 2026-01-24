@@ -5,6 +5,7 @@ from . import sales_analysis_tools
 
 load_dotenv()
 
+
 root_agent = Agent(
     name="Sales_Analysis_Agent",
     model="gemini-2.5-flash",
