@@ -3,94 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <title>Sales Analytics Chat</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f6f7f9;
-      margin: 0;
-      padding: 0;
-    }
-
-    .chat-container {
-      max-width: 900px;
-      margin: 30px auto;
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      display: flex;
-      flex-direction: column;
-      height: 80vh;
-    }
-
-    .chat-header {
-      padding: 15px;
-      border-bottom: 1px solid #ddd;
-      font-weight: bold;
-    }
-
-    .chat-messages {
-      flex: 1;
-      padding: 15px;
-      overflow-y: auto;
-    }
-
-    .message {
-      margin-bottom: 12px;
-    }
-
-    .user {
-      font-weight: bold;
-    }
-
-    .assistant {
-      background: #eef2ff;
-      padding: 10px;
-      border-radius: 6px;
-      margin-top: 4px;
-    }
-
-    .chat-input {
-      display: flex;
-      border-top: 1px solid #ddd;
-    }
-
-    .chat-input input {
-      flex: 1;
-      padding: 12px;
-      border: none;
-      outline: none;
-      font-size: 16px;
-    }
-
-    .chat-input button {
-      padding: 12px 18px;
-      border: none;
-      background: #4f46e5;
-      color: white;
-      cursor: pointer;
-    }
-
-    table {
-      border-collapse: collapse;
-      margin-top: 10px;
-      width: 100%;
-    }
-
-    th, td {
-      border: 1px solid #ccc;
-      padding: 6px;
-      text-align: left;
-    }
-
-    th {
-      background: #f0f0f0;
-    }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}" />
 </head>
 <body>
 
 <div class="chat-container">
-  <div class="chat-header">📊 Sales Analytics Assistant</div>
+  <div class="chat-header">Sales Analytics Assistant</div>
 
   <div class="chat-messages" id="messages"></div>
 
@@ -100,64 +18,9 @@
   </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 <script>
-async function sendQuery() {
-  const input = document.getElementById("queryInput");
-  const query = input.value.trim();
-  if (!query) return;
-
-  input.value = "";
-
-  const messages = document.getElementById("messages");
-
-  messages.innerHTML += `
-    <div class="message">
-      <div class="user">You:</div>
-      <div>${query}</div>
-    </div>
-  `;
-
-  const resp = await fetch("/ask", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query })
-  });
-
-  const data = await resp.json();
-
-  let html = `<div class="assistant">${data.answer || "No answer"}</div>`;
-
-  if (data.data) {
-    html += renderTable(data.data);
-  }
-
-  messages.innerHTML += `
-    <div class="message">
-      <div class="user">Assistant:</div>
-      ${html}
-    </div>
-  `;
-
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function renderTable(rows) {
-  if (!rows.length) return "";
-
-  const cols = Object.keys(rows[0]);
-  let table = "<table><tr>";
-  cols.forEach(c => table += `<th>${c}</th>`);
-  table += "</tr>";
-
-  rows.forEach(r => {
-    table += "<tr>";
-    cols.forEach(c => table += `<td>${r[c]}</td>`);
-    table += "</tr>";
-  });
-
-  table += "</table>";
-  return table;
-}
+  document.addEventListener("DOMContentLoaded", setupChat);
 </script>
 
 </body>

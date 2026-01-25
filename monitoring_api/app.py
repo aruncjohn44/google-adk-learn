@@ -148,6 +148,7 @@ def create_app() -> Flask:
         # Renders the chat UI
         return render_template("chat.html")
 
+
     @app.post("/ask")
     def ask_agent():
         payload = request.get_json() or {}
@@ -156,25 +157,51 @@ def create_app() -> Flask:
         if not query:
             return jsonify({"error": "Empty query"}), 400
 
+        user_id = "web_user"
+        session_id = "web_session"
+
+        # Ensure session exists (idempotent, like /invoke-agent)
+        session_url = (
+            f"{ADK_BASE_URL}/apps/{ADK_APP_NAME}"
+            f"/users/{user_id}/sessions/{session_id}"
+        )
+        try:
+            requests.post(session_url, json={}, timeout=10)
+        except requests.RequestException as e:
+            return jsonify({"error": f"Failed to create ADK session: {e}"}), 502
+
         adk_payload = {
             "appName": ADK_APP_NAME,
-            "userId": "web_user",
-            "sessionId": "web_session",
+            "userId": user_id,
+            "sessionId": session_id,
             "newMessage": {
                 "role": "user",
                 "parts": [{"text": query}]
             }
         }
 
-        resp = requests.post(
-            f"{ADK_BASE_URL}/run",
-            json=adk_payload,
-            timeout=60
-        )
+        try:
+            resp = requests.post(
+                f"{ADK_BASE_URL}/run",
+                json=adk_payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            return jsonify({"error": f"Failed to contact ADK agent: {e}"}), 502
 
-        events = resp.json()
+        try:
+            events = resp.json()
+        except Exception:
+            return jsonify({"error": "ADK agent did not return valid JSON.", "raw": resp.text}), 502
 
-        normalized = normalize_adk_response(events)
+        if not isinstance(events, (list, dict)):
+            return jsonify({"error": "Unexpected response format from ADK agent.", "raw": events}), 502
+
+        try:
+            normalized = normalize_adk_response(events)
+        except Exception as e:
+            return jsonify({"error": f"Failed to process ADK agent response: {e}", "raw": events}), 500
 
         return jsonify(normalized)
 

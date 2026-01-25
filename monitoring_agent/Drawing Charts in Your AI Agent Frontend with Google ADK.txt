@@ -1,0 +1,345 @@
+
+
+
+Output using vis-network lib
+When your Google ADK agent analyzes data and you ask “show me a chart,” you want actual visual charts in your frontend — not just text descriptions.
+
+Here’s how to build it the ADK-native way using Artifacts, with working code you can deploy today.
+
+The Architecture
+Key insight: Separate data from presentation. The agent creates chart configurations (JSON), stores them as ADK Artifacts, and your frontend renders them with Apache ECharts, vis-network or other libraries.
+
+Flow:
+
+User: “Show me sales by status”
+Agent → create_chart() tool → saves config as ADK Artifact
+API → loads artifacts after execution
+Frontend → receives config → renders with ECharts
+Agent (Backend)          API (Middleware)         Frontend
+     |                        |                       |
+create_chart() ──────> save_artifact()                |
+     |                        |                       |
+     |                  list_artifacts() ────────> {charts: [...]}
+     |                        |                       |
+     |                        |                  echarts.init() → 📊
+Step 1: Create the Chart Tool
+The magic happens with ToolContext—ADK automatically injects it when you declare it as the last parameter:
+
+# tools.py
+from google.adk.tools import ToolContext
+from google.genai import types
+import json
+
+async def create_chart(
+    chart_type: str,
+    title: str,
+    data: dict,
+    description: str = None,
+    tool_context: ToolContext = None  # ADK injects this!
+) -> dict:
+    """Create a visual chart. MANDATORY DATA STRUCTURES:
+    
+    Args:
+        chart_type: "bar", "line", "pie", "gauge", "scatter", "heatmap"
+        title: Chart title
+        data: Dict matching these EXACT schemas per type:
+        
+            - BAR/LINE:
+              {"xAxis": ["Mon", "Tue", "Wed"], 
+               "series": [{"name": "Sales", "type": "bar", "data": [10, 20, 15]}]}
+            
+            - PIE:
+              {"series": [{"type": "pie", 
+                           "data": [{"name": "A", "value": 10}, 
+                                    {"name": "B", "value": 20}]}]}
+            
+            - GAUGE:
+              {"series": [{"type": "gauge", 
+                           "data": [{"value": 85, "name": "Performance%"}]}]}
+        
+        description: Optional text
+    """
+    chart_config = {
+        "type": chart_type,
+        "title": title,
+        "data": data,
+        "description": description
+    }
+    
+    # Save as ADK artifact (scoped to session automatically!)
+    if tool_context:
+        chart_json = json.dumps(chart_config).encode('utf-8')
+        safe_title = "".join(c if c.isalnum() or c in (' ', '_', '-') else '_' for c in title)
+        
+        # Create Part with inline_data
+        chart_part = types.Part(
+            inline_data=types.Blob(
+                mime_type="application/json",
+                data=chart_json
+            )
+        )
+        
+        await tool_context.save_artifact(
+            filename=f"chart_{safe_title[:50]}.json",
+            artifact=chart_part
+        )
+    
+    return {"success": True, "message": f"Chart '{title}' created"}
+Critical details:
+
+tool_context: ToolContext = None - ADK injects this automatically at runtime
+Detailed docstring — Gemini needs exact examples to generate correct data structures
+types.Part(inline_data=types.Blob(...)) - Correct ADK artifact format
+Step 2: Register with Agent
+# agent.py
+from google.adk.agents import Agent
+from tools import create_chart
+
+agent = Agent(
+    model="gemini-2.5-flash",
+    name="analyst_agent",
+    instruction="You analyze data and create visualizations using the create_chart tool.",
+    tools=[create_chart]  # ADK auto-wraps functions
+)
+ADK magic: When you pass a function with tool_context: ToolContext, ADK:
+
+Auto-wraps it in FunctionTool
+Excludes tool_context from LLM's function declaration
+Injects tool_context at runtime with session info
+Step 3: Load Artifacts in API
+After agent execution, load the chart artifacts:
+
+# api.py
+from fastapi import FastAPI
+import json
+
+app = FastAPI()
+
+@app.post("/chat")
+async def chat(message: str, session_id: str, user_id: str):
+    runner = get_runner()
+    
+    # Run agent (artifacts saved during execution)
+    response_text = ""
+    async for event in runner.run_async(
+        session_id=session_id,
+        user_id=user_id,
+        new_message=message
+    ):
+        if hasattr(event, 'content'):
+            for part in event.content.parts:
+                if hasattr(part, 'text'):
+                    response_text += part.text
+    
+    # Load charts from artifacts
+    artifact_service = runner.artifact_service
+    artifact_keys = await artifact_service.list_artifact_keys(
+        app_name='my_app',
+        user_id=user_id,
+        session_id=session_id
+    )
+    
+    charts = []
+    for key in artifact_keys:
+        if key.startswith("chart_"):
+            artifact = await artifact_service.load_artifact(
+                app_name='my_app',
+                user_id=user_id,
+                session_id=session_id,
+                filename=key
+            )
+            chart_data = json.loads(artifact.inline_data.data)
+            charts.append(chart_data)
+    
+    return {
+        "response": response_text,  # Text answer
+        "charts": charts             # Chart configs (separate!)
+    }
+Key: Charts are loaded after execution and returned in a separate field. Clean separation!
+
+Step 4: Render in Frontend
+// chart-renderer.js
+function renderChart(chartConfig) {
+    const chartDiv = document.createElement('div');
+    chartDiv.style.width = '100%';
+    chartDiv.style.height = '400px';
+    
+    const chart = echarts.init(chartDiv);
+    
+    const option = {
+        title: { text: chartConfig.title },
+        tooltip: {},
+        ...chartConfig.data  // Use agent's data structure directly
+    };
+    
+    chart.setOption(option);
+    return chartDiv;
+}
+
+// Usage
+fetch('/chat', {
+    method: 'POST', 
+    body: JSON.stringify({message, session_id, user_id})
+})
+.then(r => r.json())
+.then(data => {
+    // Render text
+    showMessage(data.response);
+    
+    // Render charts
+    data.charts.forEach(chart => {
+        const element = renderChart(chart);
+        chatContainer.appendChild(element);
+    });
+});
+How Artifacts Work
+ADK Artifacts are automatically scoped to (app_name, user_id, session_id). When a tool saves an artifact:
+
+async def create_chart(..., tool_context: ToolContext = None):
+    await tool_context.save_artifact(
+        filename="chart.json",
+        artifact=chart_part
+    )
+The framework:
+
+Associates it with the current session
+Makes it accessible only to that user/session
+Handles versioning (each save = new version)
+Provides persistence options (in-memory or GCS)
+When you load artifacts in the API:
+
+artifact_keys = await artifact_service.list_artifact_keys(
+    app_name='my_app',
+    user_id=user_id,
+    session_id=session_id
+)
+You get only artifacts for that specific session. No manual state management needed.
+
+Production Tips
+1. Prevent Chart Accumulation (Critical!)
+Problem: Artifacts persist in the session. Without cleanup, charts accumulate:
+
+Request 1: User gets Chart A
+Request 2: User gets Chart A + Chart B
+Request 3: User gets Chart A + Chart B + Chart C ❌
+Solution: Delete artifacts immediately after loading:
+
+for key in artifact_keys:
+    if key.startswith("chart_"):
+        # Load
+        artifact = await artifact_service.load_artifact(...)
+        charts.append(json.loads(artifact.inline_data.data))
+        
+        # Delete immediately to prevent accumulation
+        await artifact_service.delete_artifact(
+            app_name='my_app',
+            user_id=user_id,
+            session_id=session_id,
+            filename=key
+        )
+Now each response contains only new charts from that request!
+
+2. Schema Documentation is Everything
+Without explicit examples, agents guess formats → rendering errors.
+
+Get Davide Consonni’s stories in your inbox
+Join Medium for free to get updates from this writer.
+
+Enter your email
+Subscribe
+Bad:
+
+"""data: Chart data dict"""
+Good:
+
+"""
+data: Dict with exact structure:
+    - PIE: {"series": [{"type": "pie", "data": [{"name": "A", "value": 10}]}]}
+"""
+In production, detailed schemas reduced our errors from 30% to <2%.
+
+2. Handle Edge Cases
+# When agent creates chart without text
+if not response_text and charts:
+    response_text = "Here's the visualization:"
+3. Multiple Chart Types
+# Pie chart
+create_chart("pie", "Distribution", {"series": [...]})
+
+# Bar chart  
+create_chart("bar", "Trends", {"xAxis": [...], "series": [...]})
+
+# Gauge
+create_chart("gauge", "Performance", {"series": [{"data": [{"value": 85}]}]})
+4. Session Isolation is Automatic
+Artifacts are scoped to (app_name, user_id, session_id). Each session has isolated artifact storage.
+
+Complete Working Example
+# tools.py
+from google.adk.tools import ToolContext
+from google.genai import types
+import json
+
+async def create_chart(
+    chart_type: str,
+    title: str, 
+    data: dict,
+    description: str = None,
+    tool_context: ToolContext = None
+) -> dict:
+    """Create chart. See full docstring with schemas above."""
+    config = {"type": chart_type, "title": title, "data": data, "description": description}
+    
+    if tool_context:
+        chart_part = types.Part(
+            inline_data=types.Blob(
+                mime_type="application/json",
+                data=json.dumps(config).encode('utf-8')
+            )
+        )
+        await tool_context.save_artifact(
+            filename=f"chart_{title[:30]}.json",
+            artifact=chart_part
+        )
+    
+    return {"success": True, "message": f"Chart '{title}' created"}
+
+# agent.py
+from google.adk.agents import Agent
+agent = Agent(model="gemini-2.5-flash", tools=[create_chart])
+
+# api.py - see Step 3 for artifact loading
+Bonus: LiteLLM Integration
+We use LiteLLM for model flexibility:
+
+from google.adk.models.lite_llm import LiteLlm
+
+agent = Agent(
+    model=LiteLlm(
+        model="vertex_ai/gemini-2.5-flash", # LiteLLM routing via config
+        # Swap easily: "openai/gpt-4o", "anthropic/claude-4-5-sonnet"
+    ),
+    tools=[create_chart]
+)
+Change models via config — no code changes needed.
+
+Other example
+Press enter or click to view image in full size
+
+Output using Apache ECharts lib
+Conclusion
+With ADK Artifacts, you get a straightforward solution for agent-generated charts:
+
+Agent creates chart configs using create_chart tool
+ADK stores them as session-scoped artifacts
+API loads artifacts after execution
+Frontend renders with your choice of library
+The pattern is clean, framework-native, and scales naturally.
+
+Try it yourself! The complete working example is production-ready.
+
+Google Adk
+AI Agent
+Data Visualization
+Python
+Generative Ai Tools
